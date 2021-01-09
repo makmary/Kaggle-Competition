@@ -1,0 +1,158 @@
+---
+title: "final_lab_decision_trees"
+author: "andrey"
+date: "09 01 2021"
+output: html_document
+---
+
+## Decision trees
+Мы хотим узнать, как стать богатым. В данном нам опросе есть зарабатывающая больше всего категория людей: это те, которые зарабатывают более 500k долларов в год, то есть более 3 миллионов рублей в месяц. Давайте попробуем с помощью деревьев решений найти, что делает этих людей богатыми.  
+Тот data frame, который мы получили при использовании ассоциативных правил, хорошо подходит для использования на нем деревьев решений. Воссоздаем этот data frame.
+Подключаем нужные пакеты для ассоциативных правил
+```{r, message=FALSE}
+library('arules')
+```
+Подключаем пакет для использования регулярных выражений
+```{r}
+library(dplyr)
+```
+Загружаем данные, так, чтобы заголовками были названия вопросов. Загружаем новые данные, где через блокнот все апострофы заменены на нижние подчеркивания, это нужно, чтобы можно было нормально сделать формулу для построения модели.
+```{r}
+data2 = read.csv("kaggle_survey_2020_responses_no_apostr.csv", skip = 1,na.strings="")
+```
+Убираем 1 столбец и supplementary questions
+```{r}
+data3 = data2[2:256]
+```
+Делаем новый датасет только из тех столбцов, в которых бинарные значения
+```{r}
+data_binary = is.na(select(data3, contains("Select.all.that.apply")))==FALSE
+```
+Делаем новый датасет из оставшихся столбцов
+```{r}
+data_non_binary = select(data3, !contains("Select.all.that.apply"))
+```
+Преобразуем датасет в факторы
+```{r}
+for (i in 1:length(data_non_binary))
+{
+  data_non_binary[[i]] = factor(data_non_binary[[i]])
+}
+```
+Делаем один общий датасет из этих двух датасетов
+```{r}
+data_for_assoc = cbind(data_non_binary,data_binary)
+```
+Преобразуем это в обьект для использования ассоциативных правил
+```{r}
+data_assoc = as(data_for_assoc,"transactions")
+```
+Мы получили в data_assoc матрицу, где все бинарные переменные преобразованы в true/false, небинарные, но факторные, преобразованы в набор бинарных столбцов. Если заменить true/false на 1/0 , то данные будут полностью подходить для использования кластеризации, это получатся обьекты с кучей измерений, в каждом измерении есть только 2 значения: 0 и 1. 
+Извлекаем из data_assoc матрицу особого типа, преобразуя в обычную матрицу и транспонируя, чтобы стала нормальная матрица, такая как нам нужно
+```{r}
+data_assoc@data@Dimnames[[1]] = data_assoc@itemInfo$labels
+data_for_trees = as.data.frame(t(as.matrix(data_assoc@data)))
+```
+Делаем training data и testing data
+```{r}
+training_data = head(data_for_trees, 0.9*length(data_for_trees[[1]]))
+testing_data = tail(data_for_trees, 0.1*length(data_for_trees[[1]]))
+```
+(уже не нужный участок кода)
+```{r}
+index = 1:length(training_data)
+rich_vector = training_data$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000`
+rich_index = index[names(training_data)[index]=="What.is.your.current.yearly.compensation..approximate..USD..=> $500,000"]
+independent_variables = training_data[-rich_index]
+```
+Подключаем пакеты rpart и rpart.plot
+```{r}
+library("rpart")
+library("rpart.plot")
+```
+Строим модель
+```{r}
+model = rpart(`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000`~., method = "class",data = training_data,control = rpart.control(xval=10), parms = list(split="information"))
+```
+Выводим информацию
+```{r}
+printcp(model)
+```
+Выводим дерево графически
+```{r}
+prp(model)
+```
+
+Алгоритм решил не создавать дерево, из за малого количества богатых людей (47) алгоритм решил, что не одно первое разделение не даст уменьшения всеобщей разнообразности. Надо взять большее число богатых людей, а именно прибавить к этой группе людей еще группу людей, которая зарабатывает в следующем, меньшем диапазоне., более 300.000
+```{r}
+training_data2 = data.frame(training_data,income_300_or_more = (training_data$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=300,000-500,000`))
+```
+Опять строим модель. Переменные, из которых мы сделали новую переменную, мы не включаем, иначе будет дерево с этой переменной
+```{r}
+model = rpart(income_300_or_more~.-What.is.your.current.yearly.compensation..approximate..USD......500.000 - What.is.your.current.yearly.compensation..approximate..USD...300.000.500.000,method = "class",data = training_data2,control = rpart.control(xval=10), parms = list(split="information"))
+printcp(model)
+```
+В дереве участвуют переменные, которые были в той же колонке: другие зарплаты. Дерево с ними - не то, что нам нужно, удаляем их
+```{r}
+training_data3 = select(training_data2, !contains("current.yearly.compensation"))
+```
+Строим модель
+```{r}
+model = rpart(income_300_or_more~.,method = "class",data = training_data3,control = rpart.control(xval=10), parms = list(split="information"))
+printcp(model)
+```
+Будем добавлять диапазоны заплат в интересные нам, пока не получим нормальное дерево
+```{r}
+training_data3 = select(data.frame(training_data,income_200_or_more = (training_data$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=300,000-500,000` |                                               training_data$`What.is.your.current.yearly.compensation..approximate..USD..=250,000-299,999`                            | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=200,000-249,999`)),!contains("current.yearly.compensation"))
+model = rpart(income_200_or_more~.,method = "class",data = training_data3,control = rpart.control(xval=10), parms = list(split="information"))
+printcp(model)
+```
+```{r}
+training_data3 = select(data.frame(training_data,income_150_or_more = (training_data$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=300,000-500,000` |                                               training_data$`What.is.your.current.yearly.compensation..approximate..USD..=250,000-299,999`                            | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=200,000-249,999` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=150,000-199,999`)),!contains("current.yearly.compensation"))
+model = rpart(income_150_or_more~.,method = "class",data = training_data3,control = rpart.control(xval=10), parms = list(split="information"))
+printcp(model)
+```
+Первое непустое  подходящее дерево. Чтобы его хорошо увидеть, нужно сделать масштаб 200%.
+```{r}
+prp(model,type = 1,extra = 106,varlen = 0,digits = 4,box.palette = "auto")
+```
+
+Итак, чтобы зарабатывать более 150K долларов в год, то есть более почти миллиона в месяц, нужно проживать в США, тогда шансы из маленьких станут реальными. Если ты в США, то твой единственный шанс - строить прототипы для исследования приненения машинного обучения в новых областях, влияние этого фактора на доход так же было выявлено при применении ассоциативных правил. Далее, если твой опыт в программировании более 20 лет и ты делаешь настолько крутые проекты, что тебе приходится тратить большую часть своих доходов на проведения облачных вычислений, либо на машинное обучение в целом, то ты скорее всего зарабатываешь очень много. Даже если не тратишь, ты можешь владеть фреймворком машинного обучения Keras, тогда у тебя приличные шансы быть богатым. Для тех, кто использует машинное обучение до 10 лет, почему то обязательным атрибутом является использование облачных вычислений Amazon. Возможно эти люди работают в Amazon, и им много платят там, этого из опроса не узнать.  
+Хочется посмотреть на более большое дерево, добавим еще один диапазон доходов.
+```{r}
+training_data3 = select(data.frame(training_data,income_125_or_more = (training_data$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=300,000-500,000` |                                               training_data$`What.is.your.current.yearly.compensation..approximate..USD..=250,000-299,999`                      | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=200,000-249,999` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=150,000-199,999` |  training_data$`What.is.your.current.yearly.compensation..approximate..USD..=125,000-149,999`)),!contains("current.yearly.compensation"))
+model = rpart(income_125_or_more~.,method = "class",data = training_data3,control = rpart.control(xval=10), parms = list(split="information"))
+printcp(model)
+```
+```{r}
+prp(model,type = 1,extra = 106,varlen = 0,digits = 4,box.palette = "auto")
+```
+
+Новое дерево не говорит особо ничего нового, лишь еще раз подчеркивает важность большого опыта. И наконец добавим еще один диапазон
+```{r}
+training_data3 = select(data.frame(training_data,income_100_or_more = (training_data$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=300,000-500,000` |                                               training_data$`What.is.your.current.yearly.compensation..approximate..USD..=250,000-299,999`                      | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=200,000-249,999` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=150,000-199,999` |  training_data$`What.is.your.current.yearly.compensation..approximate..USD..=125,000-149,999` | training_data$`What.is.your.current.yearly.compensation..approximate..USD..=100,000-124,999`)),!contains("current.yearly.compensation"))
+model = rpart(income_100_or_more~.,method = "class",data = training_data3,control = rpart.control(xval=10), parms = list(split="information"))
+printcp(model)
+```
+```{r}
+prp(model,type = 1,extra = 106,varlen = 0,digits = 4,box.palette = "auto")
+```
+
+Из нового SnowFlake. В датасете им пользуются лишь около 20 человек, последний выбор был очень неравный в плане, сколько в левом узле, сколько в правом. Вообще, выбор конкретного продукта обычно делается внизу дерева, им пользуются очень мало людей, возможно это просто специфичные люди из USA, работающие в одной компании. Так что не надо очень всерьез воспринимать такие узлы, так как это возможно частные случаи.  
+Возьмем изначальный вариант с самыми богатыми людьми, и с помощью модели на его основе сделаем предсказание на тестовом наборе.
+```{r}
+testing_data3 = data.frame(testing_data,income_100_or_more = (testing_data$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000` | testing_data$`What.is.your.current.yearly.compensation..approximate..USD..=300,000-500,000` |                                               testing_data$`What.is.your.current.yearly.compensation..approximate..USD..=250,000-299,999`                            | testing_data$`What.is.your.current.yearly.compensation..approximate..USD..=200,000-249,999` | testing_data$`What.is.your.current.yearly.compensation..approximate..USD..=150,000-199,999` | testing_data$`What.is.your.current.yearly.compensation..approximate..USD..=125,000-149,999` | testing_data$`What.is.your.current.yearly.compensation..approximate..USD..=100,000-124,999`))
+```
+Предсказываем на training data и строим confusion matrix.
+```{r}
+predicted = predict(model, testing_data3, type = "class")
+conf <-table(actual=testing_data3$income_100_or_more,predicted=predicted)
+conf
+```
+Считаем misclassification rates
+```{r}
+cat("rate for false:", 1-conf[1,1]/sum(conf[1,]), "\n")
+cat("rate for true:", 1-conf[2,2]/sum(conf[2,]), "\n")
+cat("rate for overall:", 1-sum(diag(conf))/sum(conf[,]), "\n")
+```
+Модель много кого недооценивает, потому что не все способы стать богатым определяются так легко по 1 дереву, и не все богачи живут в USA. Но 40% богатых действительно определяются только по 1 этому дереву.
