@@ -1,0 +1,76 @@
+---
+title: "final_lab_logistic_regression"
+author: "andrey"
+date: "11 01 2021"
+output: html_document
+---
+
+При исследовании с деревьями решений мы делали бинарный столбец, в котором 1, если участник опроса зарабатывает больше какой то суммы. На таком столбце можно попробовать логистическую регрессию, чтобы определить, как различные переменные влияют на доход.
+Воспроизводим тот дата фрейм.
+Подключаем нужные пакеты для ассоциативных правил
+```{r, message=FALSE}
+library('arules')
+```
+Подключаем пакет для использования регулярных выражений
+```{r}
+library(dplyr)
+```
+Загружаем данные, так, чтобы заголовками были названия вопросов. Загружаем новые данные, где через блокнот все апострофы заменены на нижние подчеркивания, это нужно, чтобы можно было нормально сделать формулу для построения модели.
+```{r}
+data2 = read.csv("kaggle_survey_2020_responses_no_apostr.csv", skip = 1,na.strings="")
+```
+Убираем 1 столбец и supplementary questions
+```{r}
+data3 = data2[2:256]
+```
+Делаем новый датасет только из тех столбцов, в которых бинарные значения
+```{r}
+data_binary = is.na(select(data3, contains("Select.all.that.apply")))==FALSE
+```
+Делаем новый датасет из оставшихся столбцов
+```{r}
+data_non_binary = select(data3, !contains("Select.all.that.apply"))
+```
+Преобразуем датасет в факторы
+```{r}
+for (i in 1:length(data_non_binary))
+{
+  data_non_binary[[i]] = factor(data_non_binary[[i]])
+}
+```
+Делаем один общий датасет из этих двух датасетов
+```{r}
+data_for_assoc = cbind(data_non_binary,data_binary)
+```
+Преобразуем это в обьект для использования ассоциативных правил
+```{r}
+data_assoc = as(data_for_assoc,"transactions")
+```
+Мы получили в data_assoc матрицу, где все бинарные переменные преобразованы в true/false, небинарные, но факторные, преобразованы в набор бинарных столбцов. Если заменить true/false на 1/0 , то данные будут полностью подходить для использования кластеризации, это получатся обьекты с кучей измерений, в каждом измерении есть только 2 значения: 0 и 1. 
+Извлекаем из data_assoc матрицу особого типа, преобразуя в обычную матрицу и транспонируя, чтобы стала нормальная матрица, такая как нам нужно
+```{r}
+data_assoc@data@Dimnames[[1]] = data_assoc@itemInfo$labels
+data_for_log_regr = as.data.frame(t(as.matrix(data_assoc@data)))
+```
+Делаем зависимую колонку, убираем колонки с другими зарплатами
+```{r}
+data_log_regr = select(data.frame(data_for_log_regr,income_150_or_more = (data_for_log_regr$`What.is.your.current.yearly.compensation..approximate..USD..=> $500,000` | data_for_log_regr$`What.is.your.current.yearly.compensation..approximate..USD..=300,000-500,000` |                                               data_for_log_regr$`What.is.your.current.yearly.compensation..approximate..USD..=250,000-299,999`                            | data_for_log_regr$`What.is.your.current.yearly.compensation..approximate..USD..=200,000-249,999` | data_for_log_regr$`What.is.your.current.yearly.compensation..approximate..USD..=150,000-199,999`)),!contains("current.yearly.compensation"))
+```
+Данные готовы, делаем модель
+```{r}
+model <-glm(income_150_or_more ~ .,data=data_log_regr,family=binomial(link="logit"))
+```
+Посмотрим на получившиеся коэффициенты, топ 10 самых больших 
+```{r}
+tail(sort(model$coefficients),10)
+```
+Посмотрим на получившиеся коэффициенты, топ 10 самых больших отричательных
+```{r}
+head(sort(model$coefficients),10)
+```
+Посмотрим на deviance
+```{r}
+model$deviance
+model$null.deviance
+```
+Модель плохо описывает данные
