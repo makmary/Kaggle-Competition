@@ -1,0 +1,505 @@
+---
+title: "final_lab"
+author: "andrey"
+date: "04 01 2021"
+output: html_document
+---
+Загружаем данные
+```{r}
+data = read.csv("kaggle_survey_2020_responses.csv");
+```
+
+Мы хотим посмотреть, как различные переменные влияют на доход. Доход определяется в вопросе Q24. Этот вопрос звучит так
+```{r}
+data$Q24[1]
+```
+Подумаем, как переменные могут влиять на доход. Первые 7 переменных представляют собой ответы на общие вопросы, про возраст, пол, страну, образование, роль в работе, стаж и используемые языки программирования, все это очевидно влияет на доход. Далее идет много вопросов про конкрентые средства, алгоритмы, методы используемые в работе, их влияние на доход не так очевидно, и мы их пока рассматривать не будем. Про языки ппрограммирования - вопрос с галочками, разделен на несколько колонок, остальное категориальные переменные.  
+
+## Наивный Баес
+
+Перевые 6 переменных из них, кроме языка, кажутся независимыми друг от друга, и поэтому можно попробовать построить на них наивный Баесовский классификатор, чтобы из полученной модели узнать влияние этих переменных на доход.  
+Готовим данные для создания модели. Первая строка в датафрейме - название опроса, есть пропущенные значения в столбце про доход. Создаем вектор с индексами, по которым нет пропущенных значений и первой строки.
+```{r}
+all_indexes = 2:length(data$Q24)
+index_vector = all_indexes[data$Q24[all_indexes]!=""]
+```
+Создаем data frame для построения модели
+```{r}
+data_bayes = data.frame(age = as.factor(data$Q1[index_vector]), gender = as.factor(data$Q2[index_vector]), country = as.factor(data$Q3[index_vector]), education = as.factor(data$Q4[index_vector]), role = as.factor(data$Q5[index_vector]), experience = as.factor(data$Q6[index_vector]), income = as.factor(data$Q24[index_vector]))
+```
+Делаем training data и testing data
+```{r}
+training_data = head(data_bayes, 0.9*length(data_bayes$income))
+testing_data = tail(data_bayes, 0.1*length(data_bayes$income))
+
+```
+Подключаем пакет e1071.
+```{r}
+library("e1071")
+```
+Строим модель и получаем таблицы значений априорных и условных вероятностей.
+```{r}
+model_bayes = naiveBayes(income ~ age + gender + country + education + role + experience, training_data)
+model_bayes
+```
+Используя полученную модель, делаем предсказание на тестовом наборе.
+```{r}
+results = predict(model_bayes, testing_data, type = "class")
+```
+Строим confusion matrix
+```{r}
+conf <- table(actual=testing_data$income,predicted=results)
+conf
+```
+Считаем misclassification rate
+```{r}
+cat("rate for overall", 1-sum(diag(conf))/sum(conf), "\n")
+```
+С laplace smoothing rate уменьшается на 1
+Попробуем уменьшить misclassification rate, не рассматривая некоторые плохие данные. В вопросах есть варианты ответа по типу"другие", "не указывать", "предпочитаю не отвечать и тд". Такое должно рассматриваться как пропуски в данных. Во-первых, уберем различные гендеры, кроме основных 2, или отсутствие данных о них.Уберем в вопросе про образование вариант "I prefer not to answer ь".Уберем role "others".  
+Делаем новый index_vector
+```{r}
+index_vector2 = index_vector[(data$Q2[index_vector]=="Man" | data$Q2[index_vector]=="Woman") &   data$Q4[index_vector]!="I prefer not to answer" & data$Q5[index_vector]!="Other"]
+```
+Создаем data frame для построения модели
+```{r}
+data_bayes2 = data.frame(age = as.factor(data$Q1[index_vector2]), gender = as.factor(data$Q2[index_vector2]), country = as.factor(data$Q3[index_vector2]), education = as.factor(data$Q4[index_vector2]), role = as.factor(data$Q5[index_vector2]), experience = as.factor(data$Q6[index_vector2]), income = as.factor(data$Q24[index_vector2]))
+```
+Делаем training data и testing data
+```{r}
+training_data2 = head(data_bayes2, 0.9*length(data_bayes2$income))
+testing_data2 = tail(data_bayes2, 0.1*length(data_bayes2$income))
+
+```
+Строим модель и получаем таблицы значений априорных и условных вероятностей. Используем laplace smoothing, что уменьшит misclassification rate на 1%.
+```{r}
+model_bayes2 = naiveBayes(income ~ age + gender + country + education + role + experience, training_data2, laplace = 1)
+model_bayes2
+```
+Используя полученную модель, делаем предсказание на тестовом наборе.
+```{r}
+results2 = predict(model_bayes2, testing_data2, type = "class")
+```
+Строим confusion matrix
+```{r}
+conf <- table(actual=testing_data2$income,predicted=results2)
+conf
+```
+Считаем misclassification rate
+```{r}
+cat("rate for overall", 1-sum(diag(conf))/sum(conf), "\n")
+```
+Наивный Баес не показал свою пригодность для описания такой зависимости
+
+## Формула для дохода
+Было бы неплохо сделать арифметическую формулу, по которой можно бы было просчитать доход. Такое можно сделать с помощью регрессии. В модели есть следующие переменные, которые можно преобразовать в числовые и это будет иметь смысл, которые при этом могли бы влиять на доход.
+Это возраст, образование, опыт, сколько используют ML, размер компании.
+Создадим новый датасет из этих переменных с численными значениями. Для регрессии лучше убрать пропущенные значения, убираем их
+```{r}
+index_vector3 = index_vector[data$Q1[index_vector]!="" & data$Q6[index_vector]!="" & data$Q15[index_vector]!="" & data$Q20[index_vector]!=""]
+```
+Создаем data frame для построения модели
+```{r}
+data_regression = data.frame(age = data$Q1[index_vector3], experience = data$Q6[index_vector3],ml_experience = data$Q15[index_vector3],company_size = data$Q20[index_vector3], income = data$Q24[index_vector3])
+```
+
+Преобразуем значения колонок в числа, для этого используем списки, в которых будем по строке типа "18-21" искать соответствующее число.
+```{r}
+age_table = list("18-21" = 19.5, "22-24" = 23,"25-29" =27, "30-34" = 32, "35-39" = 37, "40-44" = 42, "45-49" = 47, "50-54" = 52, "55-59" = 57, "60-69" = 64.5, "70+" = 70)
+experience_table = list("< 1 years" = 0.5, "1-2 years" = 1.5,"3-5 years" = 4,"5-10 years" = 7.5, "10-20 years" = 15, "20+ years" = 20, "I have never written code" = 0)
+ml_experience_table = list("Under 1 year" = 0.5, "1-2 years" = 1.5,"2-3 years" = 2.5,"3-4 years" = 3.5,"4-5 years" = 4.5,"5-10 years" = 7.5, "10-20 years" = 15, "20 or more years" = 20, "I do not use machine learning methods" = 0)
+company_size_table = list("0-49 employees" = 25, "50-249 employees" = 150, "250-999 employees" = 625, "1000-9,999 employees" = 5500, "10,000 or more employees" = 10000)
+income_table = list("$0-999" = 500, "> $500,000" = 500000, "1,000-1,999" = 1500, "10,000-14,999" = 12500, "100,000-124,999" = 112500, "125,000-149,999" = 137500, "15,000-19,999" = 17500, "150,000-199,999" = 175000, "2,000-2,999" = 2500, "20,000-24,999" = 22500, "200,000-249,999" = 225000, "25,000-29,999" = 27500, "250,000-299,999" = 275000, "3,000-3,999" = 3500, "30,000-39,999" = 35000, "300,000-500,000" = 400000, "4,000-4,999" = 4500, "40,000-49,999" = 45000, "5,000-7,499" = 6250, "50,000-59,999" = 55000, "60,000-69,999" = 65000,"7,500-9,999" = 8750, "70,000-79,999" = 75000, "80,000-89,999" = 85000, "90,000-99,999" = 95000)
+age_mas = 1:2
+exp_mas = 1:2
+ml_exp_mas = 1:2
+company_mas = 1:2
+income_mas = 1:2
+for (i in 1:length(index_vector3))
+{
+  age_mas[i] = age_table[[data_regression$age[i]]]
+  exp_mas[i] = experience_table[[data_regression$experience[i]]]
+  ml_exp_mas[i] = ml_experience_table[[data_regression$ml_experience[i]]]
+  company_mas[i] = company_size_table[[data_regression$company_size[i]]]
+  income_mas[i] = income_table[[data_regression$income[i]]]
+}
+data_regression2 = data.frame(age = age_mas, experience = exp_mas,ml_experience = ml_exp_mas,company_size = company_mas, income = income_mas)
+```
+
+Посмотрим, как независимые численные переменные влияют на доход.
+```{r}
+plot(data_regression2$age, data_regression2$income)
+plot(data_regression2$experience, data_regression2$income)
+plot(data_regression2$ml_experience, data_regression2$income)
+plot(data_regression2$company_size, data_regression2$income)
+
+```
+
+Тут плохо видна частота появления точек на графике, поэтому строим boxplot с помощью пакета ggplot2
+```{r}
+library(ggplot2)
+ggplot(data = data_regression2,mapping = aes(x = age, y = income)) + geom_point(alpha = 0.2, position = "jitter")
+ggplot(data = data_regression2,mapping = aes(x = experience, y = income)) + geom_point(alpha = 0.2, position = "jitter")
+ggplot(data = data_regression2,mapping = aes(x = ml_experience, y = income)) + geom_point(alpha = 0.2, position = "jitter")
+ggplot(data = data_regression2,mapping = aes(x = company_size, y = income)) + geom_point(alpha = 0.2, position = "jitter")
+```
+
+Видно, что данные перекошены, поэтому возьмем логарифм данных
+```{r}
+ggplot(data = data_regression2,mapping = aes(x = age, y = income)) + geom_point(alpha = 0.2, position = "jitter") + scale_y_log10()
+ggplot(data = data_regression2,mapping = aes(x = experience, y = income)) + geom_point(alpha = 0.2, position = "jitter") + scale_y_log10()
+ggplot(data = data_regression2,mapping = aes(x = ml_experience, y = income)) + geom_point(alpha = 0.2, position = "jitter") + scale_y_log10()
+ggplot(data = data_regression2,mapping = aes(x = company_size, y = income)) + geom_point(alpha = 0.2, position = "jitter") + scale_y_log10()
+```
+Попробуем с помощью hexbinplot
+```{r}
+library(hexbin)
+hexbinplot(income ~ age, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+hexbinplot(income ~  experience, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+hexbinplot(income ~ ml_experience, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+hexbinplot(income ~ company_size, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+```
+
+```{r}
+hexbinplot(log(income) ~ age, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+hexbinplot(log(income) ~  experience, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+hexbinplot(log(income) ~ ml_experience, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+hexbinplot(log(income) ~ company_size, data=data_regression2, trans = sqrt, inv = function(x) x^2, type=c("g", "r"))
+```
+
+Графически уследить четкую зависимость не получилось.
+Попробуем создать модель линейной регрессии только на этих переменных. Создаем OLS модель.
+```{r}
+ols<-lm(income~age + experience + ml_experience + company_size, data = data_regression2)
+summary(ols)
+```
+Попробуем использовать логарифм от дохода
+```{r}
+log_ols<-lm(log(income)~age + experience + ml_experience + company_size, data = data_regression2)
+summary(log_ols)
+```
+
+В обоих случаях значение R-squared близко к 0, плохой fit.
+Смотрим график настоящих значений против предсказанных на этом же датасете
+```{r}
+plot(data_regression2$income, predict(ols))
+abline(0,1, col = "red")
+plot(log(data_regression2$income), predict(log_ols))
+abline(0,1, col = "red")
+```
+
+Как видно, для одного и того же значения income модель в разных местах предсказывает сильно разнящиеся значения, в ообщем такой вариант линейной регрессии с такими переменными не проходит  
+
+
+Чтобы улучшить fit, нужно учесть влияние других переменных. Страна пребывания должна иметь самое большое влияние на доход, у этой переменной очень много уровней, и если добавить по переменной на страну, то будет очень громоздко. Как то сгруппировать эти страны будет тоже сложно и непонятно как именно. Поэтому сделаем регрессию отдельно для страны
+Возьмем Россию
+```{r}
+index_vector4 = index_vector3[data$Q3[index_vector3]=="United States of America"]
+data_regression_rus = data.frame(age = data$Q1[index_vector4], experience = data$Q6[index_vector4],ml_experience = data$Q15[index_vector4],company_size = data$Q20[index_vector4], income = data$Q24[index_vector4])
+age_mas = 1:2
+exp_mas = 1:2
+ml_exp_mas = 1:2
+company_mas = 1:2
+income_mas = 1:2
+for (i in 1:length(index_vector4))
+{
+  age_mas[i] = age_table[[data_regression_rus$age[i]]]
+  exp_mas[i] = experience_table[[data_regression_rus$experience[i]]]
+  ml_exp_mas[i] = ml_experience_table[[data_regression_rus$ml_experience[i]]]
+  company_mas[i] = company_size_table[[data_regression_rus$company_size[i]]]
+  income_mas[i] = income_table[[data_regression_rus$income[i]]]
+}
+data_regression_rus2 = data.frame(age = age_mas, experience = exp_mas,ml_experience = ml_exp_mas,company_size = company_mas, income = income_mas)
+
+ols_rus<-lm(income~age + experience + ml_experience + company_size, data = data_regression_rus2)
+summary(ols_rus)
+log_ols_rus<-lm(log(income)~age + experience + ml_experience + company_size, data = data_regression_rus2)
+summary(log_ols_rus)
+```
+(Удалить потом)
+```{r}
+index_vector4 = index_vector3##[data$Q3[index_vector3]=="United States of America"]
+data_regression_rus = data.frame(age = data$Q1[index_vector4], experience = data$Q6[index_vector4],ml_experience = data$Q15[index_vector4],company_size = data$Q20[index_vector4], income = data$Q24[index_vector4])
+age_mas = 1:2
+exp_mas = 1:2
+ml_exp_mas = 1:2
+company_mas = 1:2
+income_mas = 1:2
+for (i in 1:length(index_vector4))
+{
+  age_mas[i] = age_table[[data_regression_rus$age[i]]]
+  exp_mas[i] = experience_table[[data_regression_rus$experience[i]]]
+  ml_exp_mas[i] = ml_experience_table[[data_regression_rus$ml_experience[i]]]
+  company_mas[i] = company_size_table[[data_regression_rus$company_size[i]]]
+  income_mas[i] = income_table[[data_regression_rus$income[i]]]
+}
+data_regression_rus2 = data.frame(age = age_mas, experience = exp_mas,ml_experience = ml_exp_mas,company_size = company_mas, income = income_mas)
+
+ols_rus<-lm(income~company_size, data = data_regression_rus2)
+summary(ols_rus)
+log_ols_rus<-lm(log(income)~company_size, data = data_regression_rus2)
+summary(log_ols_rus)
+```
+Пора учесть такие важные показатели, как пол, роль, используемые языки программирования, образование, сколько денег потрачено на облачные вычисления и машинное обучение
+Удаляем пропущенные данные из используемых переменных. Так же добавим логарифм от размера компании и денег на машинное обучения и обл. вычисления, так как они имеют очень широкие диапазоны изменения  
+```{r}
+index_vector5 = index_vector2[data$Q1[index_vector2]!="" & data$Q6[index_vector2]!="" & data$Q15[index_vector2]!="" & data$Q20[index_vector2]!="" & data$Q4[index_vector2]!="" & data$Q5[index_vector2]!="" & data$Q25[index_vector2]!=""]
+## & data$Q3[index_vector2]=="United States of America"
+```
+Делаем данные для построения модели
+```{r}
+data_regression3 = data.frame(age = data$Q1[index_vector5], experience = data$Q6[index_vector5],ml_experience = data$Q15[index_vector5],company_size = data$Q20[index_vector5], income = data$Q24[index_vector5],
+man = as.integer(data$Q2[index_vector5]=="Man"),
+Bachelor = as.integer(data$Q4[index_vector5]=="BachelorвЂ™s degree"),
+Doctoral = as.integer(data$Q4[index_vector5]=="Doctoral degree"),
+Master = as.integer(data$Q4[index_vector5]=="MasterвЂ™s degree"),
+Professional = as.integer(data$Q4[index_vector5]=="Professional degree"),
+college = as.integer(data$Q4[index_vector5]=="Some college/university study without earning a bachelorвЂ™s degree") ,
+                              
+python = as.integer(data$Q7_Part_1[index_vector5]!=""),
+r = as.integer(data$Q7_Part_2[index_vector5]!=""),
+sql = as.integer(data$Q7_Part_3[index_vector5]!=""),
+c = as.integer(data$Q7_Part_4[index_vector5]!=""),
+cplusplus = as.integer(data$Q7_Part_5[index_vector5]!=""),
+java = as.integer(data$Q7_Part_6[index_vector5]!=""),
+javascript = as.integer(data$Q7_Part_7[index_vector5]!=""),
+julia = as.integer(data$Q7_Part_8[index_vector5]!=""),
+swift = as.integer(data$Q7_Part_9[index_vector5]!=""),
+bash = as.integer(data$Q7_Part_10[index_vector5]!=""),
+matlab = as.integer(data$Q7_Part_11[index_vector5]!=""),
+other = as.integer(data$Q7_OTHER[index_vector5]!=""),
+    
+Business_Analyst = as.integer(data$Q5[index_vector5]=="Business Analyst"),
+Data_Analyst = as.integer(data$Q5[index_vector5]=="Data Analyst"), 
+Data_Engineer = as.integer(data$Q5[index_vector5]=="Data Engineer"), 
+Data_Scientist = as.integer(data$Q5[index_vector5]=="Data Scientist"), 
+DBA_Database_Engineer = as.integer(data$Q5[index_vector5]=="DBA/Database Engineer"), 
+Machine_Learning_Engineer = as.integer(data$Q5[index_vector5]=="Machine Learning Engineer"), 
+Product_Project_Manager = as.integer(data$Q5[index_vector5]=="Product/Project Manager"), 
+Research_Scientist = as.integer(data$Q5[index_vector5]=="Research Scientist"), 
+Software_Engineer = as.integer(data$Q5[index_vector5]=="Software Engineer"), 
+Statistician = as.integer(data$Q5[index_vector5]=="Statistician"), 
+Student = as.integer(data$Q5[index_vector5]=="Student"),
+
+money_ml_cloud_spend = data$Q25[index_vector5],
+country = data$Q3[index_vector5]
+                              )
+
+money_ml_cloud_spend_table = list("$0 ($USD)" = 1, "$1-$99" = 50, "$10,000-$99,999" = 55000, "$100-$999" = 550, "$100,000 or more ($USD)" = 100000,"$1000-$9,999" = 5500)
+age_mas = 1:2
+exp_mas = 1:2
+ml_exp_mas = 1:2
+company_mas = 1:2
+income_mas = 1:2
+money_ml_cloud_spend_mas=1:2
+for (i in 1:length(index_vector5))
+{
+  age_mas[i] = age_table[[data_regression3$age[i]]]
+  exp_mas[i] = experience_table[[data_regression3$experience[i]]]
+  ml_exp_mas[i] = ml_experience_table[[data_regression3$ml_experience[i]]]
+  company_mas[i] = company_size_table[[data_regression3$company_size[i]]]
+  income_mas[i] = income_table[[data_regression3$income[i]]]
+  money_ml_cloud_spend_mas[i] = money_ml_cloud_spend_table[[data_regression3$money_ml_cloud_spend[i]]]
+}
+data_regression3$age = age_mas
+data_regression3$experience = exp_mas
+data_regression3$ml_experience = ml_exp_mas
+data_regression3$company_size = company_mas
+data_regression3$log_company_size = log(company_mas)
+data_regression3$income = income_mas
+data_regression3$money_ml_cloud_spend = money_ml_cloud_spend_mas
+data_regression3$log_money_ml_cloud_spend = log(money_ml_cloud_spend_mas)
+ols2<-lm(income~age + experience + ml_experience + company_size + log_company_size + man + Bachelor + Doctoral + Master + Professional + college + python + r + sql + c + cplusplus + java + javascript + julia + swift + bash + matlab + other
+         + Business_Analyst + Data_Analyst + Data_Engineer + Data_Scientist + DBA_Database_Engineer + Machine_Learning_Engineer + Product_Project_Manager + Research_Scientist + Software_Engineer + Statistician + Student
+           +money_ml_cloud_spend + log_money_ml_cloud_spend + country
+         , data = data_regression3)
+summary(ols2)
+log_ols2<-lm(log(income)~age + experience + ml_experience + company_size + log_company_size + man + Bachelor + Doctoral + Master + Professional + college+ python + r + sql + c + cplusplus + java + javascript + julia + swift + bash + matlab + other
+           + Business_Analyst + Data_Analyst + Data_Engineer + Data_Scientist + DBA_Database_Engineer +  Machine_Learning_Engineer + Product_Project_Manager + Research_Scientist + Software_Engineer + Statistician + Student
+             +money_ml_cloud_spend + log_money_ml_cloud_spend + country
+             , data = data_regression3)
+summary(log_ols2)
+```
+Посмотрим на модель
+```{r}
+par(mfrow=c(2,2))
+plot(ols2)
+plot(log_ols2)
+```
+Модель с логарифмом от дохода лучше, выбираем ее
+Посмотрим на самые значимые термы в получившейся формуле, которые дают самое сильное увеличение или уменьшение
+```{r}
+head(sort(log_ols2$coefficients),20)
+tail(sort(log_ols2$coefficients),20)
+```
+Хотя модель имеет средний fit, и с помощью нее нельзя достаточно правильно предсказывать зарплату, значения ее коэффициентов имеют смысл и по ним можно сделать выводы, которые согласуются с тем, что было узнано с помощью Qlik View. Большие отрицательные коэффициенты у бедных стран, большие у развитых стран, в основном это страны Европы.  
+
+
+Попробуем сделать полиномиальную регрессию - 2 степени. Для простоты пока не делаем 2 степени для country
+
+```{r}
+log_ols2_2<-lm(log(income)~(age + experience + ml_experience + company_size + log_company_size + man + Bachelor + Doctoral + Master + Professional + college+ python + r + sql + c + cplusplus + java + javascript + julia + swift + bash + matlab + other
+           + Business_Analyst + Data_Analyst + Data_Engineer + Data_Scientist + DBA_Database_Engineer +  Machine_Learning_Engineer + Product_Project_Manager + Research_Scientist + Software_Engineer + Statistician + Student
+             +money_ml_cloud_spend + log_money_ml_cloud_spend)^2 + country
+             , data = data_regression3)
+```
+Смотрим R-squared
+```{r}
+summary(log_ols2_2)$r.squared
+```
+Посмотрим на самые значимые термы в получившейся формуле, которые дают самое сильное увеличение или уменьшение
+```{r}
+head(sort(log_ols2_2$coefficients),20)
+tail(sort(log_ols2_2$coefficients),20)
+```
+Как видно из результатов, модель начинает предсказывать бред, это видно хотя бы по тому, что согласно коэффициентам, очень плохо, если человек работает с базами данных и при этом знает sql. Кроме того многие значения влияют отрицательно, такие как Data scientist, но в комбинации с другими они дают большой плюс. Скорее всего модель переобучена. Так что остановимся на том варианте без степеней.
+
+## Association rules
+
+В данных есть бинарные и небинарные колонки, а так же первая, неподходящая колонка с временем выполнения опроса
+Чтобы применить ассоциативные правила, нужно преобразовать бинарные колонки в TRUE/FALSE, небинарные(но факторные) сами преобразуются в множество бинарных, первую колонку нужно убрать. Убираю supplementary questions, мало ли кто там чего хочет освоить, пока не освоит, не поймет, что это ему не подходит.
+Подключаем нужные пакеты для ассоциативных правил
+```{r, message=FALSE}
+library('arules')
+library ('arulesViz')
+```
+Подключаем пакет для использования регулярных выражений
+```{r}
+library(dplyr)
+```
+Загружаем данные, так, чтобы заголовками были названия вопросов
+```{r}
+data2 = read.csv("kaggle_survey_2020_responses.csv", skip = 1,na.strings="")
+```
+Убираем 1 столбец и supplementary questions
+```{r}
+data3 = data2[2:256]
+```
+Делаем новый датасет только из тех столбцов, в которых бинарные значения
+```{r}
+data_binary = is.na(select(data3, contains("Select.all.that.apply")))==FALSE
+```
+Делаем новый датасет из оставшихся столбцов
+```{r}
+data_non_binary = select(data3, !contains("Select.all.that.apply"))
+```
+Преобразуем датасет в факторы
+```{r}
+for (i in 1:length(data_non_binary))
+{
+  data_non_binary[[i]] = factor(data_non_binary[[i]])
+}
+```
+Делаем один общий датасет из этих двух датасетов
+```{r}
+data_for_assoc = cbind(data_non_binary,data_binary)
+```
+Преобразуем это в обьект для использования ассоциативных правил
+```{r}
+data_assoc = as(data_for_assoc,"transactions")
+```
+Посмотрим на самые часто выбираемые варианты
+```{r}
+tail(sort(itemFrequency(data_assoc)),20)
+```
+Из этого делаем вывод, что большинство принимавших участие в опросе мужчины, большинство владеют python и советуют использовать его регулярно, используют matplotlib для визуализации данных, но иногда Seaborn, используют в качестве IDE jupiter notebook. Более половины используют линейную либо логистическую регрессию, вторым по популярности является деревья решений, либо же рандомные леса. Приличное число людей получили высшее образование. Треть владеет SQL.Scikit.learn и TensorFlow являются самыми популярными фреймворками машинного обучения. Основными медиа ресурсами по дата саенс, которыми пользуются люди, являются Youtube и Kaggle, но Kaggle проводил опрос, так что он не считается.
+Посмотрим на самые редко выбираемые варианты
+```{r}
+head(sort(itemFrequency(data_assoc)),20)
+```
+Как видно из результатов, наделали множество инструментов business intelligence, а их почти никто не использует. Очень мало людей решило решило по приколу написать, что в первую очередь дата саентисту  нужно учить swift, либо bash. Зарплату выше 250k в год получают мало людей, меньше процента. Очень мало людей с гендером, иным, чем мужчина или женщина. Это можно обьяснить тем, что обычно люди рождаются либо мужского либо женского пола.  
+
+Майним ассоциативные правила. Confidence 80% - хорошая уверенность. Так как у нас нету предпочтения, чтобы выведенные правила касались прям всего сообщества, ставим малый support.
+```{r}
+rules=apriori(data_assoc, parameter = list(support = 0.1, confidence = 0.8, target = "rules"))
+```
+Получаем количество созданных правил
+```{r}
+length(rules)
+```
+Строим график с support и confidence на осях, и lift в качестве shading.
+```{r}
+plot(rules)
+```
+Посмотрим правила, у которых lift>4
+```{r}
+subrules <-rules[rules@quality$lift > 4]
+length(subrules)
+inspect(subrules)
+```
+Слишком часто мы видим два слова "R" и "Rstudio" во всех правилах. Посмотрим на правые части  этих правил.
+```{r}
+inspect(subrules@rhs)
+```
+Как видно, использование языка R и IDE RStudio одновременно - очень частое явление, эти явления слишком сильно связаны, и поэтому повлияли на топ правил, полностью заполонив его: в правилах либо используется эти два явления и какое-нибудь популярное другое явление, например использование языка python, либо то, что действительно связано с этим явлениями - а именно использование ggplot/ggplot2. Уберем эти 2 item.
+```{r}
+data_assoc_len = 1:(length(data_for_assoc))
+index_vector6 = data_assoc_len[names(data_for_assoc)[data_assoc_len]!="What.programming.languages.do.you.use.on.a.regular.basis...Select.all.that.apply....Selected.Choice...R" & names(data_for_assoc)[data_assoc_len]!="Which.of.the.following.integrated.development.environments..IDE.s..do.you.use.on.a.regular.basis....Select.all.that.apply....Selected.Choice....RStudio"]
+data_for_assoc2 = data_for_assoc[index_vector6]
+data_assoc2 = as(data_for_assoc2,"transactions")
+```
+Снова находим правила
+```{r}
+rules2=apriori(data_assoc2, parameter = list(support = 0.1, confidence = 0.8, target = "rules"))
+length(rules2)
+```
+Строим график
+```{r}
+plot(rules2)
+```
+Находим правила с высоким lift
+```{r}
+subrules2 <-rules2[rules2@quality$lift > 3.6]
+length(subrules2)
+inspect(subrules2)
+```
+Чтобы было более ясно, посмотрим на самые часто встречающиеся в левой части items.
+```{r}
+tail(sort(itemFrequency(subrules2@lhs)),8)
+```
+Как видно, теперь в правила входят исключительно те items, которые встречаются очень часто вообще в датасете, это стандартные параметры для среднего участника опроса.
+Чтобы увидеть зависимости с более редкими items, уменьшим confidence но увеличим lift. Чтобы увидеть эти более редкие itemsetы, уменьшим support
+```{r}
+rules3=apriori(data_assoc2, parameter = list(support = 0.05, confidence = 0.5, target = "rules"))
+```
+```{r}
+plot(rules3)
+```
+```{r}
+subrules3 <-rules3[rules3@quality$lift > 7]
+length(subrules3)
+inspect(subrules3)
+```
+Теперь появляется много правил, где очевидно есть и должна быть сильная зависимость между правой частью и одним из items в левой части, остальные items в левой части никак не связаны с левой частью. Чтобы преодолеть это, давайте ограничим длину правил до 2. Теперь можно вообще не ставить ограничений на support, алгоритм будет завершать работу, когда будет достигнута максимальная длина
+```{r}
+rules4=apriori(data_assoc, parameter = list(support = 0, confidence = 0.7, target = "rules",maxlen = 2))
+```
+Далее будет summary того, что найдено из правил
+```{r}
+subrules4 <-rules4[rules4@quality$lift > 7]
+length(subrules4)
+inspect(subrules4)
+```
+Выводы из этих правил: во первых, много правил, что люди, которые используют какое нибудь средство, например business intelligence tool, используют его наиболее часто из всех средств, то есть обычно люди выбирают средство и на нем останавливаются, больше не используя никакое другое. Так же есть правила, устанавливающие связь между продуктами одной компании, если они используют один продукт компании, то скорее всего они используют другой, в смежной с ним области, то есть погружаются в экосистему этой компании, например люди, которые используют Google.Cloud.Vision.AI для машинного обучения, так же скорее всего используют Google.Cloud.Platform..GCP для облачных вычислений. Более всего в погружении людей в свою экосистему приуспевают Google и Amazon. Люди, которые используют Alteryx, скорее всего используют Tableau(это business intelligence tools). Люди, владеющие Contextualized.embeddings..ELMo..CoVe., скорее всего так же шарят за Transformer.language.models..GPT.3..BERT..XLnet.. , Encoder.decorder.models..seq2seq..vanilla.transformers и Word.embeddings.vectors..GLoVe..fastText..word2vec. Что касаемо фреймворков машинного обучения, то люди, использующие CatBoost так же используют LightGBM, между ними есть какая то связь!  
+Посмотрим правила с чуть меньшим, но еще хорошим lift, вдруг там есть что то интересное
+```{r}
+subrules5 <-rules4[rules4@quality$lift <= 7 & rules4@quality$lift > 4]
+length(subrules5)
+inspect(subrules5)
+```
+Люди, которые используют очень редкое средство business intelligence "Domo" предпочитают облачные вычисления на амазоне. А пользователи Sisense скорее всего будут использовать MySQL и Github. Амазон так же очень нравится пользователям Einstein Analytics,Looker и облачной платформы Snowflake. Почему то самым верным признаком того, что человек владеет github, является использование различных методов машинного обучения. Связи между языком R, его пакетами Shiny,Caret и ggplot, его фреймворком Tidymodels и средой RStudio теперь установлена официально. Чтобы шарить за Рекуррентные нейронные сети, можно знать Contextualized.embeddings..ELMo..CoVe., и тут эта технология стала залогом знания в других областях. Использование CatBoost сопряжено с использованием Xgboost. Есть некоторые связи, которые возникли из-за методики проведения опроса, когда некоторые вопросы задаются, если был дан ответ на какой то из других вопросов, особенно это относится к вопросам про NLP. такие правила мы исключаем из рассмотрения.  
+Пора приблизиться к тому порогу, когда правила начинают возникать из-за случайностей. Хотелось бы увидеть чуть чуть зависимостей с более популярными ответами.
+```{r}
+subrules6 <-rules4[rules4@quality$lift <= 4 & rules4@quality$lift > 3]
+length(subrules6)
+inspect(subrules6)
+```
+Языком R пользуются те, кто работает в роли статистика.Люди, которые зарабатывают более миллиона рублей в месяц, дают нам некоторые советы.Чтобы зарабатывать как они, нам придется пытаться применять методы машинного обучения в новых, неизведанных областях. Но при этом не использовать автоматические средства машинного обучения, такие как tpot, которые используются в этой работе.
+Строим Graph-based visualization, увеличивая лимит отображения.
+```{r}
+subrules7 <-rules4[rules4@quality$lift > 3]
+plot(subrules7, method = "graph", engine = "htmlwidget", control = list(max=300))
+```
+Как мы видим, образовались несколько островков правил, сильно связанных между собой. Самый большой островок - это сервисы компании Amazon. Еще один островок  основан на облачных средствах google. Есть маленький островок вокруг Microsoft Azure. Островок вокруг GitHub никак нельзя ксассифицировать - просто очень много людей его используют. Еще островок вокруг языка R, на нем множество средств, связанных с ним. Есть так же целый кластер из людей, которые много на что ответили "None", вообщем они еще новички.
+
+
